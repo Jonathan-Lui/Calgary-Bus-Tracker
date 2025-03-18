@@ -2,79 +2,80 @@ import streamlit as st
 import pandas as pd
 import pydeck as pdk
 
-st.title("🚍 Calgary Bus Tracker")
+DATA_URL = "https://data.calgary.ca/resource/jkyn-p9x4.csv"
 
-# Load the data
-url = "https://data.calgary.ca/resource/jkyn-p9x4.csv"
-df = pd.read_csv(url)
+@st.cache_data
+def load_data(url):
+    df = pd.read_csv(url)
+    df = df.dropna(subset=['latitude', 'longitude'])
+    return df
 
-# Clean the data - drop rows without lat/long
-df = df.dropna(subset=['latitude', 'longitude'])
+def filter_by_vehicle(df, vehicle_id):
+    return df[df['vehicle_id'] == vehicle_id]
 
-# Sidebar filter for vehicle_id
-vehicle_ids = df['vehicle_id'].unique()
-selected_vehicle_id = st.sidebar.selectbox("Select Vehicle ID:", vehicle_ids)
+def calculate_view_state(df):
+    return pdk.ViewState(
+        latitude=df['latitude'].mean(),
+        longitude=df['longitude'].mean(),
+        zoom=12,
+        pitch=50,
+    )
 
-# Filter the dataframe by selected vehicle_id
-filtered_df = df[df['vehicle_id'] == selected_vehicle_id]
+def create_layers(filtered_df):
+    heatmap_layer = pdk.Layer(
+        "HeatmapLayer",
+        data=filtered_df,
+        get_position='[longitude, latitude]',
+        radiusPixels=60,
+    )
 
-# Sort by time for a proper trail (optional)
-filtered_df = filtered_df.sort_values(by='vehicle_position_date_time')
+    path_data = [{
+        'path': filtered_df[['longitude', 'latitude']].values.tolist(),
+        'name': f'Vehicle {filtered_df.iloc[0]["vehicle_id"]}' if not filtered_df.empty else 'Vehicle'
+    }]
 
-st.subheader(f"Heatmap and Trail for Vehicle ID: {selected_vehicle_id}")
+    path_layer = pdk.Layer(
+        "PathLayer",
+        data=path_data,
+        get_path="path",
+        get_width=4,
+        get_color=[255, 0, 0],
+        width_min_pixels=2,
+    )
 
-# Create a heatmap layer
-heatmap_layer = pdk.Layer(
-    "HeatmapLayer",
-    data=filtered_df,
-    get_position='[longitude, latitude]',
-    radiusPixels=60,
-)
+    return heatmap_layer, path_layer
 
-# Create a line layer for the vehicle's trail
-line_layer = pdk.Layer(
-    "LineLayer",
-    data=filtered_df,
-    get_source_position='[longitude, latitude]',
-    get_target_position='[longitude, latitude]',
-    get_color=[0, 0, 255],
-    get_width=4,
-    pickable=True,
-)
+def main():
+    st.title("🚍 Calgary Bus Tracker")
 
-# Create a path layer (alternative to line layer)
-path_data = [{
-    'path': filtered_df[['longitude', 'latitude']].values.tolist(),
-    'name': f'Vehicle {selected_vehicle_id}'
-}]
+    df = load_data(DATA_URL)
 
-path_layer = pdk.Layer(
-    "PathLayer",
-    data=path_data,
-    get_path="path",
-    get_width=4,
-    get_color=[255, 0, 0],
-    width_min_pixels=2,
-)
+    # Sidebar filter
+    vehicle_ids = df['vehicle_id'].unique()
+    selected_vehicle_id = st.sidebar.selectbox("Select Vehicle ID:", vehicle_ids)
 
-# Set the viewport location and zoom level
-view_state = pdk.ViewState(
-    latitude=filtered_df['latitude'].mean(),
-    longitude=filtered_df['longitude'].mean(),
-    zoom=12,
-    pitch=50,
-)
+    filtered_df = filter_by_vehicle(df, selected_vehicle_id)
 
-# Render the deck.gl map with both heatmap and path layers
-r = pdk.Deck(
-    map_style='mapbox://styles/mapbox/light-v9',
-    initial_view_state=view_state,
-    layers=[heatmap_layer, path_layer],  # Swap to line_layer if you prefer
-    tooltip={"text": "Lat: {latitude}\nLon: {longitude}"}
-)
+    if filtered_df.empty:
+        st.warning("No data found for this vehicle.")
+        return
 
-st.pydeck_chart(r)
+    view_state = calculate_view_state(filtered_df)
 
-# Show raw data option
-if st.checkbox("Show raw data"):
-    st.write(filtered_df)
+    heatmap_layer, path_layer = create_layers(filtered_df)
+
+    r = pdk.Deck(
+        map_style='mapbox://styles/mapbox/light-v9',
+        initial_view_state=view_state,
+        layers=[heatmap_layer, path_layer],
+        tooltip={"text": "Lat: {latitude}\nLon: {longitude}"}
+    )
+
+    st.subheader(f"Heatmap and Trail for Vehicle ID: {selected_vehicle_id}")
+    st.pydeck_chart(r)
+
+    if st.checkbox("Show raw data"):
+        st.write(filtered_df)
+
+if __name__ == "__main__":
+    main()
